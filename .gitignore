@@ -1,0 +1,19 @@
+# Python 虛擬環境
+venv/
+.venv/
+env/
+
+# Python 快取
+__pycache__/
+*.py[cod]
+*.pyo
+
+# macOS
+.DS_Store
+
+# 編輯器
+.vscode/
+.idea/
+
+# Node
+node_modules/

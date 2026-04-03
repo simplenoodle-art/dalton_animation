@@ -4,10 +4,18 @@
   "description": "Dynamic histogram animation with real-time updates",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
-    "express": "^4.17.1",
-    "socket.io": "^4.4.1"
+    "express": "^4.18.2",
+    "find-process": "^1.4.7",
+    "mqtt": "^5.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
-} 
+}

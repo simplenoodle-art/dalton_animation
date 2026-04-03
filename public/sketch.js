@@ -3,17 +3,21 @@ let sampleRangeMax = 3;      // 資料上界
 
 let canvasHeight = 1920;
 let canvasWidth = 1080;
-let marginHeight = 96;
+// let marginHeight = 96;
+let marginHeight = 120;
 // let marginHeight = 80;
 let marginWidth = canvasWidth / 6;
+// let offsetHeight = -30;
 let offsetHeight = -30;
 let imgHeight = canvasHeight/2 - marginHeight*2;       // 右側影像高度
-let imgWidth = imgHeight*9/16;        // 右側影像寬度
-let histogramHeight = canvasHeight/4 - marginHeight*1.5;  // 新增：直方圖的高度
-let scale_factor = 24; // 2, 3, 4, 6, 8, 12, 24
-// let scale_factor = 10;
+// let imgWidth = imgHeight*9/16;        // 右側影像寬度
+let imgWidth = imgHeight*2/3;        // 右側影像寬度
+// let histogramHeight = canvasHeight/4 - marginHeight*1.5;  // 新增：直方圖的高度
+let histogramHeight = canvasHeight/4 - marginHeight*1.2;  // 新增：直方圖的高度
+let scale_factor = 12; // 2, 3, 4, 6, 8, 12, 24
 let noiseWidth = imgWidth / scale_factor;        // 右側影像寬度
 let noiseHeight = imgHeight / scale_factor;       // 右側影像高度
+let thirdHeightOffset = 5;
 
 let originalSampleCount = 1000;  // 移除，未使用
 // fixedBins數量24, '30'
@@ -93,8 +97,8 @@ let finalMatrixValuesPrinted = false;
 let barAnimations = [];
 let squareAnimations = [];  // 為第二張圖添加動畫參數
 
-// 全局變數
-let socket;
+// 全局變數 - 替換 socket 為 client
+let client;
 let hasReceivedData = false;
 let resetCanvas = false;
 
@@ -195,238 +199,281 @@ class Sample{
 }
 
 function initializeData() {
-  // 動畫相關變數
-  isAnimating = true;
-  firstAnimationComplete = false;
-  circlesFallingComplete = false;
-  colorTransitionComplete = false;
-  colorTransitionStartTime = 0;
-  secondAnimationComplete = false;
-  thirdAnimationStartTime = 0;
-  thirdAnimationComplete = false;
+  try {
+    // 檢查 fixedBins 是否有足夠的資料
+    if (!Array.isArray(fixedBins) || fixedBins.length < 5) {
+      console.error('fixedBins 資料不足，無法初始化');
+      throw new Error('資料點數量不足，至少需要 5 個數據點');
+    }
+    
+    // 檢查是否都是數值
+    if (!fixedBins.every(bin => typeof bin === 'number')) {
+      console.error('fixedBins 包含非數值元素');
+      throw new Error('資料點必須全為數值');
+    }
+    
+    // 確保資料有效性 - 避免全為 0 的情況
+    if (fixedBins.every(bin => bin === 0)) {
+      console.warn('fixedBins 全為 0，將使用預設樣本數據');
+      fixedBins = [0, 2, 8, 10, 15, 19, 25, 30, 35, 40, 45, 53, 64, 77, 87, 77, 92, 64, 46, 40, 35, 30, 27, 23, 17, 13, 10, 6, 3, 2];
+    }
+    
+    // 動畫相關變數
+    isAnimating = true;
+    firstAnimationComplete = false;
+    circlesFallingComplete = false;
+    colorTransitionComplete = false;
+    colorTransitionStartTime = 0;
+    secondAnimationComplete = false;
+    thirdAnimationStartTime = 0;
+    thirdAnimationComplete = false;
 
-  // 所有停頓相關參數
-  pauseStartTime = 0;
-  pauseComplete = false;
-  secondGraphPauseStartTime = 0;
-  secondGraphPauseComplete = false;
-  gaussianPauseStartTime = 0;
-  gaussianPauseComplete = false;
+    // 所有停頓相關參數
+    pauseStartTime = 0;
+    pauseComplete = false;
+    secondGraphPauseStartTime = 0;
+    secondGraphPauseComplete = false;
+    gaussianPauseStartTime = 0;
+    gaussianPauseComplete = false;
 
-  // 橫線動畫相關變數
-  line1Progress = 0;
-  line1AnimationStartTime = 0;
-  line1AnimationComplete = false;
+    // 橫線動畫相關變數
+    line1Progress = 0;
+    line1AnimationStartTime = 0;
+    line1AnimationComplete = false;
 
-  line2Progress = 0;
-  line2AnimationStartTime = 0;
-  line2AnimationComplete = false;
+    line2Progress = 0;
+    line2AnimationStartTime = 0;
+    line2AnimationComplete = false;
 
-  finalMatrixAnimationComplete = false;
-  finalMatrixValuesPrinted = false;
+    finalMatrixAnimationComplete = false;
+    finalMatrixValuesPrinted = false;
 
-  // 清空之前的數據
-  if (samples) {
-    // 清理 Sample 物件的引用
-    samples.forEach(sample => {
-      for (let prop in sample) {
-        sample[prop] = null;
+    // 更新 binCount
+    binCount = fixedBins.length;
+
+    // 清空之前的數據
+    if (samples) {
+      // 清理 Sample 物件的引用
+      samples.forEach(sample => {
+        for (let prop in sample) {
+          sample[prop] = null;
+        }
+      });
+      samples.length = 0;
+    }
+    samples = [];
+
+    if (mappedBins) {
+      mappedBins.forEach((_, index) => mappedBins[index] = null);
+      mappedBins.length = 0;
+    }
+    mappedBins = [];
+
+    if (expandedBins) {
+      expandedBins.forEach(bin => {
+        if (bin) {
+          bin.forEach((_, index) => bin[index] = null);
+          bin.length = 0;
+        }
+      });
+      expandedBins.length = 0;
+    }
+    expandedBins = [];
+
+    if (squaresPerExpandedBin) {
+      squaresPerExpandedBin.forEach((_, index) => squaresPerExpandedBin[index] = null);
+      squaresPerExpandedBin.length = 0;
+    }
+    squaresPerExpandedBin = [];
+
+    if (flattenedValues) {
+      flattenedValues.forEach((_, index) => flattenedValues[index] = null);
+      flattenedValues.length = 0;
+    }
+    flattenedValues = [];
+
+    // 清理動畫相關的數組
+    if (barAnimations) {
+      barAnimations.forEach(anim => {
+        if (anim.circles) {
+          anim.circles.forEach((_, index) => anim.circles[index] = null);
+          anim.circles.length = 0;
+        }
+      });
+      barAnimations.length = 0;
+    }
+
+    if (squareAnimations) {
+      squareAnimations.forEach(anim => {
+        if (anim.squares) {
+          anim.squares.forEach((_, index) => anim.squares[index] = null);
+          anim.squares.length = 0;
+        }
+      });
+      squareAnimations.length = 0;
+    }
+
+    // 重置其他相關變數
+    try {
+      totalSampleCount = fixedBins.reduce(getSum);
+      if (totalSampleCount <= 0) {
+        throw new Error('樣本總數為零或負數');
       }
-    });
-    samples.length = 0;
-  }
-  samples = [];
-
-  if (mappedBins) {
-    mappedBins.forEach((_, index) => mappedBins[index] = null);
-    mappedBins.length = 0;
-  }
-  mappedBins = [];
-
-  if (expandedBins) {
-    expandedBins.forEach(bin => {
-      if (bin) {
-        bin.forEach((_, index) => bin[index] = null);
-        bin.length = 0;
+    } catch (error) {
+      console.error('計算樣本總數出錯:', error);
+      // 使用備用值，避免除以零錯誤
+      totalSampleCount = 1000;
+      fixedBins = fixedBins.map(bin => bin > 0 ? bin : 1); // 確保每個 bin 至少有 1 個樣本
+    }
+    
+    // 計算 binsPerOriginalBin
+    let binsPerOriginalBin = (canvasWidth - marginWidth*2) / scale_factor / binCount;
+    
+    // 產生原始資料
+    for (let i = 0; i < binCount; i++) {
+      let count = round(noiseWidth*noiseHeight * (fixedBins[i] / totalSampleCount));
+      // 計算該 bin 的數值範圍
+      let binLow = map(i, 0, binCount, sampleRangeMin, sampleRangeMax);
+      let binHigh = map(i + 1, 0, binCount, sampleRangeMin, sampleRangeMax);
+      mappedBins.push(count)
+      for (let j = 0; j < count; j++) {
+        if (samples.length == noiseWidth*noiseHeight) {
+          mappedBins[mappedBins.length-1]--;
+        } else {
+          let val = random(binLow, binHigh); // 均勻抽樣
+          val = map(val, sampleRangeMin, sampleRangeMax, 0, 255);
+          let sample = new Sample(val);
+          samples.push(sample);
+        }
       }
-    });
-    expandedBins.length = 0;
-  }
-  expandedBins = [];
+    }
 
-  if (squaresPerExpandedBin) {
-    squaresPerExpandedBin.forEach((_, index) => squaresPerExpandedBin[index] = null);
-    squaresPerExpandedBin.length = 0;
-  }
-  squaresPerExpandedBin = [];
-
-  if (flattenedValues) {
-    flattenedValues.forEach((_, index) => flattenedValues[index] = null);
-    flattenedValues.length = 0;
-  }
-  flattenedValues = [];
-
-  // 清理動畫相關的數組
-  if (barAnimations) {
-    barAnimations.forEach(anim => {
-      if (anim.circles) {
-        anim.circles.forEach((_, index) => anim.circles[index] = null);
-        anim.circles.length = 0;
-      }
-    });
-    barAnimations.length = 0;
-  }
-
-  if (squareAnimations) {
-    squareAnimations.forEach(anim => {
-      if (anim.squares) {
-        anim.squares.forEach((_, index) => anim.squares[index] = null);
-        anim.squares.length = 0;
-      }
-    });
-    squareAnimations.length = 0;
-  }
-
-  // 重置其他相關變數
-  totalSampleCount = fixedBins.reduce(getSum);
-  
-  // 計算 binsPerOriginalBin
-  let binsPerOriginalBin = (canvasWidth - marginWidth*2) / scale_factor / binCount;
-  
-  // 產生原始資料
-  for (let i = 0; i < binCount; i++) {
-    let count = round(noiseWidth*noiseHeight * (fixedBins[i] / totalSampleCount));
-    // 計算該 bin 的數值範圍
-    let binLow = map(i, 0, binCount, sampleRangeMin, sampleRangeMax);
-    let binHigh = map(i + 1, 0, binCount, sampleRangeMin, sampleRangeMax);
-    mappedBins.push(count)
-    for (let j = 0; j < count; j++) {
-      if (samples.length == noiseWidth*noiseHeight) {
-        mappedBins[mappedBins.length-1]--;
-      } else {
+    // 若重建的 sample 數量超過或不足，做補足或截斷
+    if (samples.length < noiseWidth*noiseHeight) {
+      let deficit = noiseWidth*noiseHeight - samples.length;
+      // 補足不足的部分（隨機選一個 bin產生均勬的值）
+      for (let i = 0; i < deficit; i++) {
+        let binIndex = floor(random(0, binCount));
+        mappedBins[binIndex]++;
+        let binLow = map(binIndex, 0, binCount, sampleRangeMin, sampleRangeMax);
+        let binHigh = map(binIndex + 1, 0, binCount, sampleRangeMin, sampleRangeMax);
         let val = random(binLow, binHigh); // 均勻抽樣
         val = map(val, sampleRangeMin, sampleRangeMax, 0, 255);
         let sample = new Sample(val);
         samples.push(sample);
       }
     }
-  }
 
-  // 若重建的 sample 數量超過或不足，做補足或截斷
-  if (samples.length < noiseWidth*noiseHeight) {
-    let deficit = noiseWidth*noiseHeight - samples.length;
-    // 補足不足的部分（隨機選一個 bin產生均勬的值）
-    for (let i = 0; i < deficit; i++) {
-      let binIndex = floor(random(0, binCount));
-      mappedBins[binIndex]++;
-      let binLow = map(binIndex, 0, binCount, sampleRangeMin, sampleRangeMax);
-      let binHigh = map(binIndex + 1, 0, binCount, sampleRangeMin, sampleRangeMax);
-      let val = random(binLow, binHigh); // 均勻抽樣
-      val = map(val, sampleRangeMin, sampleRangeMax, 0, 255);
-      let sample = new Sample(val);
-      samples.push(sample);
+    samples = shuffle(samples);
+    for (let i = 0; i < samples.length; i++) {
+      samples[i].noiseIdx = i;
     }
-  }
-
-  samples = shuffle(samples);
-  for (let i = 0; i < samples.length; i++) {
-    samples[i].noiseIdx = i;
-  }
-  for (let i = 0, idx = 0; i < noiseWidth; i++) {
-    for (let j = 0; j < noiseHeight; j++) {
-      samples[idx].noiseX = i;
-      samples[idx].noiseY = j;
-      idx++;
-    }
-  }
-  
-  samples.sort((a, b) => b.val - a.val);
-  for (let i = 0; i < samples.length; i++) {
-    samples[i].sortedIdx = i;
-  }
-  for (let i = 0, idx = 0; i < binCount; i++) {
-    for (let j = 0; j < mappedBins[i]; j++) {
-      samples[idx].sortedX = i;
-      samples[idx].sortedY = j;
-      idx++;
-    }
-  }
-
-  // 展開 bins
-  for (let i = 0; i < binCount; i++) {
-    let squaresInBin = mappedBins[i];
-    let squaresPerNewBin = Math.floor(squaresInBin / binsPerOriginalBin);
-    let remainder = squaresInBin % binsPerOriginalBin;
-    
-    // 為每個原始 bin 創建 binsPerOriginalBin 個新的 bin
-    for (let j = 0; j < binsPerOriginalBin; j++) {
-      let newBinCount = squaresPerNewBin;
-      // 根據 bin 的位置決定餘數的分配
-      if (i < binCount/2) {  // 前半段的 bin
-        if (j === binsPerOriginalBin - 1) {
-          newBinCount += remainder;  // 將餘數加到最後一個新 bin
-        }
-      } else {  // 後半段的 bin
-        if (j === 0) {
-          newBinCount += remainder;  // 將餘數加到第一個新 bin
-        }
+    for (let i = 0, idx = 0; i < noiseWidth; i++) {
+      for (let j = 0; j < noiseHeight; j++) {
+        samples[idx].noiseX = i;
+        samples[idx].noiseY = j;
+        idx++;
       }
-      squaresPerExpandedBin.push(newBinCount);
     }
-  }
-  
-  // 重新組織 samples 到展開後的 bins
-  let sampleIndex = 0;
-  for (let i = 0; i < binCount; i++) {
-    let squaresInOriginalBin = mappedBins[i];
-    let squaresPerNewBin = Math.floor(squaresInOriginalBin / binsPerOriginalBin);
-    let remainder = squaresInOriginalBin % binsPerOriginalBin;
     
-    let expandedBinStart = i * binsPerOriginalBin;
-    
-    // 分配樣本到新的 bins
-    for (let j = 0; j < squaresInOriginalBin; j++) {
-      let targetBin;
-      if (i < binCount/2) {  // 前半段的 bin
-        // 計算目標 bin：如果超過了基本配額的總和，就放到最後一個 bin
-        targetBin = Math.min(Math.floor(j / squaresPerNewBin), binsPerOriginalBin - 1);
-      } else {  // 後半段的 bin
-        // 先填滿第一個 bin（包含餘數），然後再平均分配到其他 bin
-        if (j < squaresPerNewBin + remainder) {
-          targetBin = 0;
-        } else {
-          targetBin = Math.min(Math.floor((j - remainder) / squaresPerNewBin), binsPerOriginalBin - 1);
-        }
+    samples.sort((a, b) => b.val - a.val);
+    for (let i = 0; i < samples.length; i++) {
+      samples[i].sortedIdx = i;
+    }
+    for (let i = 0, idx = 0; i < binCount; i++) {
+      for (let j = 0; j < mappedBins[i]; j++) {
+        samples[idx].sortedX = i;
+        samples[idx].sortedY = j;
+        idx++;
       }
+    }
+
+    // 展開 bins
+    for (let i = 0; i < binCount; i++) {
+      let squaresInBin = mappedBins[i];
+      let squaresPerNewBin = Math.floor(squaresInBin / binsPerOriginalBin);
+      let remainder = squaresInBin % binsPerOriginalBin;
       
-      if (!expandedBins[expandedBinStart + targetBin]) {
-        expandedBins[expandedBinStart + targetBin] = [];
+      // 為每個原始 bin 創建 binsPerOriginalBin 個新的 bin
+      for (let j = 0; j < binsPerOriginalBin; j++) {
+        let newBinCount = squaresPerNewBin;
+        // 根據 bin 的位置決定餘數的分配
+        if (i < binCount/2) {  // 前半段的 bin
+          if (j === binsPerOriginalBin - 1) {
+            newBinCount += remainder;  // 將餘數加到最後一個新 bin
+          }
+        } else {  // 後半段的 bin
+          if (j === 0) {
+            newBinCount += remainder;  // 將餘數加到第一個新 bin
+          }
+        }
+        squaresPerExpandedBin.push(newBinCount);
       }
-      expandedBins[expandedBinStart + targetBin].push(samples[sampleIndex]);
-      sampleIndex++;
     }
-  }
+    
+    // 重新組織 samples 到展開後的 bins
+    let sampleIndex = 0;
+    for (let i = 0; i < binCount; i++) {
+      let squaresInOriginalBin = mappedBins[i];
+      let squaresPerNewBin = Math.floor(squaresInOriginalBin / binsPerOriginalBin);
+      let remainder = squaresInOriginalBin % binsPerOriginalBin;
+      
+      let expandedBinStart = i * binsPerOriginalBin;
+      
+      // 分配樣本到新的 bins
+      for (let j = 0; j < squaresInOriginalBin; j++) {
+        let targetBin;
+        if (i < binCount/2) {  // 前半段的 bin
+          // 計算目標 bin：如果超過了基本配額的總和，就放到最後一個 bin
+          targetBin = Math.min(Math.floor(j / squaresPerNewBin), binsPerOriginalBin - 1);
+        } else {  // 後半段的 bin
+          // 先填滿第一個 bin（包含餘數），然後再平均分配到其他 bin
+          if (j < squaresPerNewBin + remainder) {
+            targetBin = 0;
+          } else {
+            targetBin = Math.min(Math.floor((j - remainder) / squaresPerNewBin), binsPerOriginalBin - 1);
+          }
+        }
+        
+        if (!expandedBins[expandedBinStart + targetBin]) {
+          expandedBins[expandedBinStart + targetBin] = [];
+        }
+        expandedBins[expandedBinStart + targetBin].push(samples[sampleIndex]);
+        sampleIndex++;
+      }
+    }
 
-  // 計算最大高度
-  let histogramWidth = canvasWidth - marginWidth * 2;
-  let binWidth = histogramWidth / binCount;
-  
-  // 計算binWidth和circleSize
-  binWidth = (canvasWidth - marginWidth * 2) / binCount;
-  circleSize = binWidth;
-  
-  // 計算固定的圓形間距
-  circleSpacing = circleSize;  // 設定圓形間距等於圓形大小，使圓形上下切齊
-  maxCircleCount = floor(histogramHeight / circleSpacing) + 1;
+    // 計算最大高度
+    let histogramWidth = canvasWidth - marginWidth * 2;
+    let binWidth = histogramWidth / binCount;
+    
+    // 計算binWidth和circleSize
+    binWidth = (canvasWidth - marginWidth * 2) / binCount;
+    circleSize = binWidth;
+    
+    // 計算固定的圓形間距
+    circleSpacing = circleSize;  // 設定圓形間距等於圓形大小，使圓形上下切齊
+    maxCircleCount = floor(histogramHeight / circleSpacing) + 1;
 
-  // 為每個樣本添加目標位置屬性（用於圖3的動畫）
-  for (let i = 0; i < samples.length; i++) {
-    samples[i].targetNoiseX = samples[i].noiseX;
-    samples[i].targetNoiseY = samples[i].noiseY;
-    samples[i].inFinalPosition = false;
+    // 為每個樣本添加目標位置屬性（用於圖3的動畫）
+    for (let i = 0; i < samples.length; i++) {
+      samples[i].targetNoiseX = samples[i].noiseX;
+      samples[i].targetNoiseY = samples[i].noiseY;
+      samples[i].inFinalPosition = false;
+    }
+    
+    setupBarAnimation();
+    console.log('初始化完成，樣本總數:', totalSampleCount);
+  } catch (error) {
+    console.error('初始化數據時出錯:', error);
+    background(255);
+    textSize(24);
+    textAlign(CENTER, CENTER);
+    fill(255, 0, 0);
+    text('初始化數據出錯: ' + error.message, width/2, height/2 - 30);
+    text('請檢查發送的數據格式是否正確', width/2, height/2 + 10);
+    hasReceivedData = false;
   }
-  
-  setupBarAnimation();
 }
 
 function mousePressed() {
@@ -443,22 +490,233 @@ function setup() {
   createCanvas(canvasWidth, canvasHeight);
   frameRate(60);
   
-  // 初始化 Socket.IO
-  socket = io();
+  connectToMQTT();
+}
+
+// 連接到 MQTT broker 的函數
+function connectToMQTT() {
+  // 初始化 MQTT 客戶端
+  const clientId = 'galton_animation_client_' + Math.random().toString(16).substr(2, 8);
+  
+  // MQTT 品質等級（QoS）設定
+  const mqttQoS = {
+    subscribe: 2,  // 訂閱使用 QoS 1：至少一次傳遞保證
+    publish: 2     // 發布使用 QoS 2：確保只傳遞一次
+  };
+  
+  // 嘗試使用不同的連接方式
+  let hosts = [
+    'ws://localhost:8083/mqtt',    // EMQ X 標準路徑
+  ];
+  
+  // 如果需要通過環境變數或配置指定 MQTT broker 地址，可以在這裡修改
+  // 例如從 URL 參數讀取 MQTT 伺服器地址
+  const urlParams = new URLSearchParams(window.location.search);
+  const mqttHost = urlParams.get('mqtt_host');
+  const mqttPort = urlParams.get('mqtt_port');
+  const mqttPath = urlParams.get('mqtt_path');
+  
+  // 也可以從 URL 參數讀取 QoS 設定
+  const subscribeQoS = parseInt(urlParams.get('subscribe_qos'));
+  const publishQoS = parseInt(urlParams.get('publish_qos'));
+  
+  // 如果 URL 中指定了有效的 QoS 參數，則更新 QoS 設定
+  if (!isNaN(subscribeQoS) && subscribeQoS >= 0 && subscribeQoS <= 2) {
+    mqttQoS.subscribe = subscribeQoS;
+    console.log(`使用 URL 參數指定的訂閱 QoS: ${mqttQoS.subscribe}`);
+  }
+  
+  if (!isNaN(publishQoS) && publishQoS >= 0 && publishQoS <= 2) {
+    mqttQoS.publish = publishQoS;
+    console.log(`使用 URL 參數指定的發布 QoS: ${mqttQoS.publish}`);
+  }
+  
+  // 如果 URL 中指定了 MQTT 伺服器參數，則優先使用
+  if (mqttHost) {
+    const port = mqttPort || '8083';
+    const path = mqttPath || '/mqtt';
+    hosts.unshift(`ws://${mqttHost}:${port}${path}`);
+    console.log(`使用 URL 參數指定的 MQTT 伺服器: ${hosts[0]}`);
+  }
+  
+  // 選擇第一個連接選項
+  let currentHostIndex = 0;
+  let host = hosts[currentHostIndex];
+  
+  const options = {
+    keepalive: 60,
+    clientId: clientId,
+    clean: true,
+    reconnectPeriod: 3000,   // 增加重連間隔
+    connectTimeout: 30 * 1000,
+    protocolId: 'MQTT',
+    protocolVersion: 4,
+    rejectUnauthorized: false
+  };
+  
+  // 添加連接重試計數
+  let connectionAttempts = 0;
+  const maxConnectionAttempts = 3;
+  
+  console.log('嘗試連接到 MQTT broker: ' + host);
+  client = mqtt.connect(host, options);
+  
+  // 成功連接事件
+  client.on('connect', function() {
+    console.log('已成功連接到 MQTT broker: ' + host);
+    connectionAttempts = 0; // 重置連接嘗試計數
+    
+    // 訂閱主題時設定 QoS 級別 (0, 1, 或 2)
+    const subscribeOptions = {
+      qos: mqttQoS.subscribe  // 使用全局設定的訂閱 QoS
+    };
+    
+    client.subscribe('galton/bins', subscribeOptions, function(err) {
+      if (err) {
+        console.error('訂閱主題失敗:', err);
+      } else {
+        console.log(`已成功訂閱主題: galton/bins (QoS: ${subscribeOptions.qos})`);
+      }
+    });
+    
+    // 將 QoS 設定保存到全局變數中，以便其他函數使用
+    window.mqttQoS = mqttQoS;
+  });
+  
+  // 錯誤處理
+  client.on('error', function(error) {
+    console.error(`MQTT 連接錯誤 (${host}):`, error);
+    
+    connectionAttempts++;
+    console.log(`連接嘗試次數: ${connectionAttempts}/${maxConnectionAttempts}`);
+    
+    if (connectionAttempts >= maxConnectionAttempts) {
+      // 當前伺服器嘗試次數已達上限，嘗試下一個伺服器
+      connectionAttempts = 0;
+      currentHostIndex++;
+      
+      if (currentHostIndex < hosts.length) {
+        console.log(`嘗試下一個連接選項: ${hosts[currentHostIndex]}`);
+        client.end(true);  // 關閉當前連接
+        
+        // 短暫延遲後嘗試新連接
+        setTimeout(() => {
+          host = hosts[currentHostIndex];
+          client = mqtt.connect(host, options);
+          setupEventHandlers(client, host);
+        }, 1000);
+      } else {
+        // 所有選項都失敗時的反饋
+        background(255);
+        textSize(24);
+        textAlign(CENTER, CENTER);
+        fill(255, 0, 0);
+        text('MQTT 連接失敗: ' + error.message, width/2, height/2 - 30);
+        text('已嘗試所有可能的連接選項但均失敗', width/2, height/2 + 10);
+        text('請檢查 MQTT broker 是否運行，且相關端口已開啟', width/2, height/2 + 50);
+        
+        // 在頁面底部添加手動重試按鈕
+        createRetryButton();
+      }
+    }
+  });
+  
+  // 設置事件處理
+  setupEventHandlers(client, host);
+}
+
+// 創建重試按鈕
+function createRetryButton() {
+  const retryButton = createButton('重新連接');
+  retryButton.position(width/2 - 50, height/2 + 100);
+  retryButton.size(100, 40);
+  retryButton.style('background-color', '#4CAF50');
+  retryButton.style('color', 'white');
+  retryButton.style('border', 'none');
+  retryButton.style('border-radius', '5px');
+  retryButton.style('font-size', '16px');
+  retryButton.mousePressed(() => {
+    retryButton.remove();
+    connectToMQTT();
+  });
+}
+
+// 設置 MQTT 客戶端事件處理
+function setupEventHandlers(clientInstance, currentHost) {
+  // 重連事件
+  clientInstance.on('reconnect', function() {
+    console.log(`正在重新連接到 MQTT broker (${currentHost})...`);
+  });
+  
+  // 關閉事件
+  clientInstance.on('close', function() {
+    console.log(`MQTT 連接已關閉 (${currentHost})`);
+  });
+  
+  // 離線事件
+  clientInstance.on('offline', function() {
+    console.log(`MQTT 客戶端離線 (${currentHost})`);
+  });
   
   // 監聽新數據
-  socket.on('updateBins', (newFixedBins) => {
-    console.log('Received new data');
-    
-    // // 更新數據
-    fixedBins = newFixedBins;
-
-    // 呼叫初始化函數
-    initializeData();
-    
-    // 標記已收到數據
-    hasReceivedData = true;
-    resetCanvas = true;
+  clientInstance.on('message', function(topic, message) {
+    if (topic === 'galton/bins') {
+      console.log(`從 ${currentHost} 收到新數據`);
+      
+      try {
+        // 解析 JSON 數據
+        const messageData = JSON.parse(message.toString());
+        console.log('接收到的數據:', messageData);
+        
+        // 確保數據是陣列格式
+        let newFixedBins;
+        if (Array.isArray(messageData)) {
+          // 如果直接是陣列
+          newFixedBins = messageData;
+        } else if (messageData.fixedBins && Array.isArray(messageData.fixedBins)) {
+          // 如果是 {fixedBins: [...]} 格式
+          newFixedBins = messageData.fixedBins;
+        } else if (typeof messageData === 'object') {
+          // 如果是其他物件格式，嘗試轉換為陣列
+          try {
+            newFixedBins = Object.values(messageData);
+            if (newFixedBins.length === 0 || !newFixedBins.every(item => typeof item === 'number')) {
+              throw new Error('無法從物件轉換為有效的數值陣列');
+            }
+          } catch (objError) {
+            throw new Error('接收到的數據不是有效的陣列或可轉換為陣列的格式');
+          }
+        } else {
+          throw new Error('接收到的數據不是有效的陣列格式');
+        }
+        
+        // 檢查陣列是否包含數值
+        if (!newFixedBins.every(item => typeof item === 'number')) {
+          throw new Error('陣列中包含非數值元素');
+        }
+        
+        // 更新數據
+        console.log('處理後的 fixedBins 陣列:', newFixedBins);
+        fixedBins = newFixedBins;
+        
+        // 呼叫初始化函數
+        initializeData();
+        
+        // 標記已收到數據
+        hasReceivedData = true;
+        resetCanvas = true;
+      } catch (e) {
+        console.error('解析 MQTT 消息出錯:', e);
+        // 錯誤反饋顯示在畫面上
+        background(255);
+        textSize(24);
+        textAlign(CENTER, CENTER);
+        fill(255, 0, 0);
+        text('MQTT 數據解析錯誤: ' + e.message, width/2, height/2 - 30);
+        text('請確保發送的數據是有效的數值陣列格式', width/2, height/2 + 10);
+        text('例如: [0, 2, 8, 10, 15, 19, ...]', width/2, height/2 + 50);
+      }
+    }
   });
 }
 
@@ -550,7 +808,7 @@ function draw() {
                   val: sampledSquares[anim.nextCircleIndex].val
                 });
                 anim.nextCircleIndex++;
-                anim.nextCircleDelay = random(circleMinDelay, circleMaxDelay);  // 使用圓形的延遲時間範圍
+                anim.nextCircleDelay = random(circleMinDelay, circleMaxDelay);  // 使用園形的延遲時間範圍
                 anim.lastCircleTime = currentTime;  // 更新最後一個圓形出現的時間
               }
             }
@@ -739,7 +997,7 @@ function draw() {
         let maxExpandedHeight = Math.max(...squaresPerExpandedBin);
         // let squareSpacing = (histogramHeight - 20) / (maxExpandedHeight - 1);  // 使用新的 histogramHeight
         let squareSpacing = maxCircleCount * circleSize / (maxExpandedHeight - 1);  // 使用新的 histogramHeight
-        console.log(maxCircleCount, circleSize, maxCircleCount * circleSize);
+        // console.log(maxCircleCount, circleSize, maxCircleCount * circleSize);
 
         for (let i = 0; i < expandedBins.length; i++) {
           if (expandedBins[i] && expandedBins[i].length > 0) {
@@ -1028,7 +1286,8 @@ function draw() {
             for (let i = 0; i < samples.length; i++) {
               // 根據noiseIdx設置最終位置
               let finalX = canvasWidth/2 - imgWidth/2 + (samples[i].noiseX * squareSize);
-              let finalY = canvasHeight/2 + marginHeight + (samples[i].noiseY * squareSize);
+              // let finalY = canvasHeight/2 + marginHeight + (samples[i].noiseY * squareSize);
+              let finalY = canvasHeight/2 + (canvasHeight/2 - (noiseHeight*squareSize))/2 + thirdHeightOffset + (samples[i].noiseY * squareSize);
               
               samples[i].finalTargetX = finalX;
               samples[i].finalTargetY = finalY;
@@ -1111,9 +1370,45 @@ function draw() {
           
           // 標記為已印出
           finalMatrixValuesPrinted = true;
+          
+          // 發送完成訊息到 MQTT broker
+          sendCompletionMessage();
         }
       }
     }
+  }
+}
+
+// 發送完成訊息到 MQTT broker
+function sendCompletionMessage() {
+  if (client && client.connected) {
+    console.log('動畫完成，發送完成訊息到 galton/completed');
+    
+    // 創建包含完成時間和動畫參數的消息
+    const completionMessage = {
+      timestamp: new Date().toISOString(),
+      status: 'completed',
+      finalValues: flattenedValues.length > 100 ? 
+        flattenedValues.slice(0, 100).concat(['...']) : 
+        flattenedValues
+    };
+    
+    // 設定發布選項，包含 QoS 級別
+    const publishOptions = {
+      qos: window.mqttQoS ? window.mqttQoS.publish : 2,  // 使用全局設定的發布 QoS，默認為 2
+      retain: false  // 是否保留最後一條消息
+    };
+    
+    // 發布消息到 galton/completed 主題，使用設定的 QoS 級別
+    client.publish('galton/completed', JSON.stringify(completionMessage), publishOptions, function(err) {
+      if (err) {
+        console.error('發送完成訊息失敗:', err);
+      } else {
+        console.log(`已成功發送完成訊息到 galton/completed (QoS: ${publishOptions.qos})`);
+      }
+    });
+  } else {
+    console.warn('MQTT 客戶端未連接，無法發送完成訊息');
   }
 }
 
