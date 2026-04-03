@@ -108,17 +108,54 @@ http://localhost:3000/?subscribe_qos=1&publish_qos=2
 
 ## 參數設定
 
-可以在 sketch.js 中調整以下參數：
+可以在 `sketch_merge.js` 開頭直接修改以下參數，或透過 URL 參數覆蓋（詳見下方）：
 
-- `canvasWidth`：畫布寬度 (預設：1080)
-- `canvasHeight`：畫布高度 (預設：1920)
-- `marginWidth`：邊距寬度
-- `marginHeight`：邊距高度
+### 畫布與動畫參數
+
+- `canvasWidth`：合併畫布總寬度（預設：2160）
+- `canvasHeight`：畫布高度（預設：1920）
+- `twoCanvasWidth`：高爾頓板動畫區域寬度（預設：1080）
+- `oneCanvasWidth`：圖片溶解動畫區域寬度（預設：1080）
 - `pauseDuration`：各階段之間的停頓時間
 - `circleSize`：圓形大小
 - `squareSize`：方塊大小
 - `circleFallSpeed`：圓形落下速度
 - `squareFallSpeed`：方塊落下速度
+- `countdownDuration`：每階段倒數計時長度
+
+### 模式控制參數
+
+- `manualMode`（預設：`true`）
+  - `true`：手動模式，倒數結束後會暫停並顯示提示，等待按下 **Enter 鍵**才進入下一步
+  - `false`：自動模式，倒數結束後自動進入下一步，無需手動觸發
+  - 可透過 URL 參數 `?manual=1`（啟用）或 `?manual=0`（停用）覆蓋
+
+- `isOneCanvasLeft`（預設：`false`）
+  - `true`：圖片溶解區（oneCanvas）在左，高爾頓板區（twoCanvas）在右
+  - `false`：高爾頓板區（twoCanvas）在左，圖片溶解區（oneCanvas）在右
+  - 直接修改程式碼生效，無對應 URL 參數
+
+- `targetFrameRate`（預設：`50`）
+  - 動畫目標幀率（fps），數值越高動畫越流暢，但對 GPU 要求越高
+  - 可透過 URL 參數 `?fps=30` 覆蓋（支援任意正整數）
+
+### URL 參數總覽
+
+可在網址後附加參數來動態調整行為，多個參數以 `&` 串接：
+
+```
+http://localhost:3000/?manual=1&fps=50&halfrate=0
+```
+
+| URL 參數 | 對應設定 | 說明 |
+|---|---|---|
+| `manual=1` / `manual=0` | `manualMode` | 啟用 / 停用手動模式 |
+| `fps=數值` | `targetFrameRate` | 設定目標幀率，例如 `fps=30` |
+| `halfrate=1` / `halfrate=0` | `movingSquaresHalfRate` | 啟用半幀率渲染（改善卡頓） |
+| `mqtt_host=` | MQTT 主機 | 自訂 MQTT Broker 位址 |
+| `mqtt_port=` | MQTT 埠號 | 自訂 MQTT Broker 埠號 |
+| `subscribe_qos=` | 訂閱 QoS | 0 / 1 / 2 |
+| `publish_qos=` | 發布 QoS | 0 / 1 / 2 |
 
 ## 常見問題
 

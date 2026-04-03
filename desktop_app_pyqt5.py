@@ -80,9 +80,14 @@ class DaltonAnimationPyQt5App(QMainWindow):
         settings.setAttribute(QWebEngineSettings.JavascriptCanOpenWindows, True)
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
         settings.setAttribute(QWebEngineSettings.AllowWindowActivationFromJavaScript, True)
-        settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, False)  # 允許自動播放音頻
+        settings.setAttribute(QWebEngineSettings.PlaybackRequiresUserGesture, False)
         settings.setAttribute(QWebEngineSettings.JavascriptCanAccessClipboard, True)
         settings.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
+        # 效能最大化設定
+        settings.setAttribute(QWebEngineSettings.WebGLEnabled, True)                  # 啟用 WebGL
+        settings.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, True)   # 加速 2D Canvas
+        settings.setAttribute(QWebEngineSettings.ScrollAnimatorEnabled, False)        # 關閉滾動動畫省資源
+        settings.setAttribute(QWebEngineSettings.ShowScrollBars, False)               # 隱藏捲軸
         
         # 設定用戶代理字串以提供更好的相容性
         custom_user_agent = (
@@ -90,7 +95,10 @@ class DaltonAnimationPyQt5App(QMainWindow):
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         )
-        self.web_view.page().profile().setHttpUserAgent(custom_user_agent)
+        profile = self.web_view.page().profile()
+        profile.setHttpUserAgent(custom_user_agent)
+        # 提高 HTTP 快取上限至 512MB，減少重複載入資源的開銷
+        profile.setHttpCacheMaximumSize(512 * 1024 * 1024)
         
         layout.addWidget(self.web_view)
         
@@ -1051,9 +1059,39 @@ def main():
     print("達爾頓動畫桌面應用程式 (PyQt5版本)")
     print("=" * 50)
     
+    # ──────────────────────────────────────────────
+    # 效能最大化：Chromium 命令列旗標
+    # 必須在 QApplication 建立之前設定
+    # ──────────────────────────────────────────────
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join([
+        # GPU 加速
+        "--enable-gpu-rasterization",           # GPU 光柵化
+        "--enable-zero-copy",                   # 零拷貝渲染，減少記憶體複製
+        "--ignore-gpu-blocklist",               # 忽略 GPU 黑名單，強制啟用 GPU
+        "--enable-native-gpu-memory-buffers",   # 原生 GPU 記憶體緩衝
+        "--enable-oop-rasterization",           # 獨立程序 GPU 光柵化
+        "--enable-raw-draw",                    # 直接繪製，減少合成開銷
+        # 渲染執行緒
+        "--num-raster-threads=4",               # 光柵化執行緒數（建議 4）
+        # 影格率
+        "--disable-frame-rate-limit",           # 移除 60fps 限制
+        # Canvas / WebGL
+        "--enable-accelerated-2d-canvas",       # 加速 2D Canvas（p5.js 使用）
+        "--enable-webgl",                       # 確保 WebGL 開啟
+        "--enable-webgl2",                      # 啟用 WebGL2
+        # 記憶體
+        "--max-gum-fps=120",                    # 提高最大 GPU 影格率
+        "--disable-gpu-vsync",                  # 關閉 GPU VSync，降低延遲
+        # 其他
+        "--disable-background-timer-throttling", # 停用背景分頁節流
+        "--disable-renderer-backgrounding",      # 停用背景渲染器降速
+    ])
+    
     # 設定高DPI支援 - 必須在QApplication創建之前設定
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    QApplication.setAttribute(Qt.AA_UseDesktopOpenGL, True)   # 強制使用桌面 OpenGL
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True) # 共享 OpenGL context
     
     # 建立QApplication
     app = QApplication(sys.argv)
