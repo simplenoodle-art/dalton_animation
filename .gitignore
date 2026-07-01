@@ -17,3 +17,7 @@ __pycache__/
 
 # Node
 node_modules/
+
+# 中間產物圖片（本機生成，不納入版本庫）
+public/intermediate_images/
+public/intermediate_images.zip

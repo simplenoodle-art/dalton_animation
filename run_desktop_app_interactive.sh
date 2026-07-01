@@ -30,13 +30,13 @@ echo "正在啟動達爾頓動畫桌面應用程式..."
 
 # 啟動桌面應用程式
 source /Users/mac/Documents/dalton_animation/venv/bin/activate
-python /Users/mac/Documents/dalton_animation/desktop_app_pyqt5.py &
+python /Users/mac/Documents/dalton_animation/desktop_app_pyqt5.py --interactive &
 DESKTOP_APP_PID=$!
 deactivate
 
 # 啟動圖片生成程式
 source /Users/mac/Documents/diffusion_noise_substitution/venv/bin/activate
-python /Users/mac/Documents/diffusion_noise_substitution/generate_image.py &
+python /Users/mac/Documents/diffusion_noise_substitution/generate_image.py --mode interactive &
 GENERATE_IMAGE_PID=$!
 deactivate
 

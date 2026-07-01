@@ -6,6 +6,7 @@
 """
 
 import sys
+import argparse
 import requests
 import time
 import subprocess
@@ -38,9 +39,16 @@ class CustomWebEnginePage(QWebEnginePage):
                 print(f"JavaScript警告: {message}")
 
 class DaltonAnimationPyQt5App(QMainWindow):
-    def __init__(self):
+    def __init__(self, interactive: bool = False):
         super().__init__()
+        self.interactive = interactive
         self.server_url = "http://localhost:3000"
+        # interactive 模式載入專用 HTML；一般模式載入預設首頁
+        self.page_url = (
+            f"{self.server_url}/index_interactive.html"
+            if interactive
+            else self.server_url
+        )
         self.server_process = None
         self.web_view = None
         self.is_custom_size = False  # 追蹤是否為自定義尺寸
@@ -50,7 +58,8 @@ class DaltonAnimationPyQt5App(QMainWindow):
         
     def init_ui(self):
         """初始化用戶介面"""
-        self.setWindowTitle('達爾頓動畫 - 動態直方圖 (PyQt5)')
+        mode_label = 'Interactive 互動模式' if self.interactive else '動態直方圖'
+        self.setWindowTitle(f'達爾頓動畫 - {mode_label} (PyQt5)')
         
         # 建立中央widget和布局
         central_widget = QWidget()
@@ -902,8 +911,8 @@ class DaltonAnimationPyQt5App(QMainWindow):
     def load_web_content(self):
         """載入網頁內容"""
         if self.web_view:
-            self.web_view.setUrl(QUrl(self.server_url))
-            print(f"正在載入: {self.server_url}")
+            self.web_view.setUrl(QUrl(self.page_url))
+            print(f"正在載入: {self.page_url}")
     
     def keyPressEvent(self, event):
         """處理按鍵事件"""
@@ -1055,8 +1064,30 @@ class DaltonAnimationPyQt5App(QMainWindow):
 
 def main():
     """主函數"""
+    # ── 命令列參數解析 ──
+    parser = argparse.ArgumentParser(
+        description='達爾頓動畫桌面應用程式 (PyQt5版本)',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            '使用範例:\n'
+            '  python desktop_app_pyqt5.py              # 一般模式（動態直方圖）\n'
+            '  python desktop_app_pyqt5.py --interactive # Interactive 互動模式\n'
+            '  python desktop_app_pyqt5.py -i            # Interactive 互動模式（簡寫）'
+        )
+    )
+    parser.add_argument(
+        '--interactive', '-i',
+        action='store_true',
+        default=False,
+        help='啟用 Interactive 互動模式（載入 index_interactive.html）'
+    )
+    args = parser.parse_args()
+
     print("=" * 50)
-    print("達爾頓動畫桌面應用程式 (PyQt5版本)")
+    if args.interactive:
+        print("達爾頓動畫桌面應用程式 — Interactive 互動模式")
+    else:
+        print("達爾頓動畫桌面應用程式 (PyQt5版本)")
     print("=" * 50)
     
     # ──────────────────────────────────────────────
@@ -1107,12 +1138,13 @@ def main():
         return
     
     # 建立並運行應用程式
-    dalton_app = DaltonAnimationPyQt5App()
+    dalton_app = DaltonAnimationPyQt5App(interactive=args.interactive)
     
     try:
         if dalton_app.run():
             # 顯示使用說明
-            print("\n🎮 控制說明:")
+            mode_str = 'Interactive 互動模式' if args.interactive else '一般模式'
+            print(f"\n🎮 控制說明 [{mode_str}]:")
             print("【鍵盤控制】")
             # print("- ESC: 退出應用程式")
             # print("- F11: 切換自定義視窗尺寸和正常尺寸")

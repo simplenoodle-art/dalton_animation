@@ -4,10 +4,25 @@ let manualMode = true;
 let movingSquaresHalfRate = false;
 let isOneCanvasLeft = false;  // true: oneCanvas(圖片溶解)在左, twoCanvas(高爾頓板)在右; false: 相反
 let targetFrameRate = 50; // 可設定的禎率（亦可用 URL 參數 ?fps=30 覆蓋）
-let countdownDuration = 3600; // 倒數計時長度（秒），可設定參數
+////////////////////////////////////////////////////////////
+let countdownDuration = 3000; // 倒數計時長度（秒），可設定參數
 let DEBUG = false;
+// 預分配格子模式：true 時 oneCanvas 改為預先排好 8 個 Step 格子，
+// 每次收到 generator/completed_to_main 就以溶解方式填入對應格子，
+// 無需在每個新 Step 開始時重設 oneCanvas。
+let preAllocatedMode = true;
 
 function debugLog(...args) { if (DEBUG) console.log(...args); }
+
+// ========== 預分配格子模式 (preAllocated Mode) 狀態變數 ==========
+let preAllocBorderMargin = 100;   // Row 0 與畫布上下邊框的距離（px）
+let preAllocGap = 20;            // 列與列、欄與欄之間的間距（px）
+let preAllocLayout = null;      // 佈局計算結果（setup 時初始化）
+let preAllocDissolves = {};     // { [slotIdx 0-7]: dissolveState } 溶解動畫狀態
+let preAllocBlockSize = 12;     // 溶解方塊大小（px）
+let preAllocGridInitialized = false; // 佔位格與標籤是否已畫到主畫布
+let preAllocMoveDuration = 1.2; // 移動動畫時長（秒，可調整）
+let preAllocMainGraphics = null; // 離屏背景層：灰底 + 已提交格子，移動動畫時用來清底
 
 // 合併畫布設置
 let canvasWidth = 2160;  // 合併後的寬度
@@ -23,6 +38,7 @@ let isCountdownActive = false;
 
 // 手動模式相關參數
 let waitingForKeypress = false;
+let waitingForHandshakeKeypress = false; // 所有 handshake 完成後等待 Enter 才開始（manualMode）
 let countdownSquares = [];
 let totalCountdownSquares = 0;
 // 添加閃爍相關變數
@@ -413,6 +429,11 @@ function setup() {
     }
     
     connectToMQTT();
+
+    // 預分配模式：預先計算 8 格佈局
+    if (preAllocatedMode) {
+      preAllocLayout = computePreAllocLayout();
+    }
     
     // 初始化左側為全白圖片（上下都是白色）
     oneImgNow = createImage(480, 720);
@@ -1270,33 +1291,41 @@ function setupEventHandlers(clientInstance, currentHost) {
           isPhysiontraceOn = true;
         }
         if (isGeneratorOn && isGaltonBoardOn && isPhysiontraceOn && !hasMainSequenceStarted) {
-          // 檢查現在時間是否已到早上09:00:00
-          let now = new Date();
-          let targetTime = new Date();
-          targetTime.setHours(11, 0, 0, 0);
-          
-          if (now >= targetTime) {
-            debugLog('時間已到或超過早上09:00:00，立即開始執行');
-            hasMainSequenceStarted = true;
-            sendStartMessage();
-            globalWaitingState = true;
-            imageWaitingState = true;
-            noiseWaitingState = true;
-            startNewStep();
-          } else if (scheduledStartTimeoutId === null) {
-            let waitTime = targetTime - now;
-            debugLog(`現在時間未到早上09:00:00，將在 ${waitTime} 毫秒後開始執行 (${targetTime.toLocaleTimeString()})`);
+          if (manualMode) {
+            // 手動模式：等待 Enter 鍵，不立即執行
+            if (!waitingForHandshakeKeypress) {
+              waitingForHandshakeKeypress = true;
+              debugLog('所有裝置已連線，等待 Enter 鍵開始執行');
+            }
+          } else {
+            // 自動模式：檢查現在時間是否已到早上09:00:00
+            let now = new Date();
+            let targetTime = new Date();
+            targetTime.setHours(11, 0, 0, 0);
             
-            scheduledStartTimeoutId = setTimeout(() => {
-              scheduledStartTimeoutId = null;
+            if (now >= targetTime) {
+              debugLog('時間已到或超過早上09:00:00，立即開始執行');
               hasMainSequenceStarted = true;
-              debugLog('已到達早上09:00:00，開始執行');
               sendStartMessage();
               globalWaitingState = true;
               imageWaitingState = true;
               noiseWaitingState = true;
               startNewStep();
-            }, waitTime);
+            } else if (scheduledStartTimeoutId === null) {
+              let waitTime = targetTime - now;
+              debugLog(`現在時間未到早上09:00:00，將在 ${waitTime} 毫秒後開始執行 (${targetTime.toLocaleTimeString()})`);
+              
+              scheduledStartTimeoutId = setTimeout(() => {
+                scheduledStartTimeoutId = null;
+                hasMainSequenceStarted = true;
+                debugLog('已到達早上09:00:00，開始執行');
+                sendStartMessage();
+                globalWaitingState = true;
+                imageWaitingState = true;
+                noiseWaitingState = true;
+                startNewStep();
+              }, waitTime);
+            }
           }
         }
       } catch (error) {
@@ -1351,18 +1380,39 @@ function setupEventHandlers(clientInstance, currentHost) {
       try {
         const messageData = JSON.parse(message.toString());
         debugLog('接收到的左側數據:', messageData);
-        
-        if (messageData.image_path) {
-          const wasWaitingForFirstImage = imageWaitingState;
-          loadNextImageAndStartAnimation(messageData.image_path);
-          // 退出等待狀態，開始動畫
-          globalWaitingState = false;
-          imageWaitingState = false;
-          // 僅在剛離開「等待第一張圖」時整張清白底（去掉 Waiting 文字）；下一張圖進來不要清，避免下方圖被刷成空白
-          if (wasWaitingForFirstImage) {
-            needsOneCanvasClear = true;
+
+        if (preAllocatedMode) {
+          // ── 預分配模式：依序將圖片溶解填入對應的 Step 格子 ──
+          // nowStep 已由 startNewStep() 遞增，slotIdx = nowStep - 1（0-indexed，0-7）
+          if (messageData.image_path) {
+            const slotIdx = nowStep - 1;
+            if (slotIdx >= 0 && slotIdx < 8) {
+              const imgPath = messageData.image_path;
+              loadImage(imgPath, img => {
+                startPreAllocDissolve(slotIdx, img);
+                debugLog(`[preAlloc] Step ${nowStep} 圖片載入完成，開始溶解至格子 ${slotIdx}`);
+              }, () => {
+                console.error('[preAlloc] 圖片載入失敗:', imgPath);
+              });
+            }
+            globalWaitingState = false;
+            imageWaitingState = false;
+            debugLog('[preAlloc] 收到圖片，退出等待狀態');
           }
-          debugLog('收到圖片數據，退出等待狀態');
+        } else {
+          // ── 原始模式：正常的移動 + 溶解動畫 ──
+          if (messageData.image_path) {
+            const wasWaitingForFirstImage = imageWaitingState;
+            loadNextImageAndStartAnimation(messageData.image_path);
+            // 退出等待狀態，開始動畫
+            globalWaitingState = false;
+            imageWaitingState = false;
+            // 僅在剛離開「等待第一張圖」時整張清白底（去掉 Waiting 文字）；下一張圖進來不要清，避免下方圖被刷成空白
+            if (wasWaitingForFirstImage) {
+              needsOneCanvasClear = true;
+            }
+            debugLog('收到圖片數據，退出等待狀態');
+          }
         }
       } catch (error) {
         console.error('解析左側MQTT訊息失敗:', error);
@@ -1377,8 +1427,8 @@ function startNewStep() {
   noiseWaitingState = true;
   textSize(36);
   text("Waiting for the noise ......", twoCanvasX + twoCanvasWidth/2, canvasHeight/2);
-  // 重新初始化白色圖片
-  if (nowStep == 1) {
+  // 重新初始化白色圖片（預分配模式下不需要重設 oneCanvas）
+  if (nowStep == 1 && !preAllocatedMode) {
     initializeWhiteImages();
   }
   // 開始倒數計時
@@ -1402,17 +1452,52 @@ function draw() {
     // 初始等待需要清除左側面板
     rect(oneCanvasX, 0, oneCanvasWidth, canvasHeight);
     oneIdleCached = false;
+    preAllocGridInitialized = false;
 
     fill(0);
     textAlign(CENTER, CENTER);
     textSize(36);
-    text("Waiting for start", oneCanvasX + oneCanvasWidth/2, canvasHeight/2);
-    text("Waiting for start", twoCanvasX + twoCanvasWidth/2, canvasHeight/2);
+    text("等待裝置開機完成", oneCanvasX + oneCanvasWidth/2, canvasHeight/2);
+    text("等待裝置開機完成", twoCanvasX + twoCanvasWidth/2, canvasHeight/2);
 
     if (currentTimeSeconds - lastHandshakeTime >= 0.5) {
       lastHandshakeTime = currentTimeSeconds;
       sendHandshakeMessage();
     }
+    return;
+  }
+
+  // 手動模式：所有 handshake 完成後等待 Enter 鍵
+  if (waitingForHandshakeKeypress) {
+    rect(oneCanvasX, 0, oneCanvasWidth, canvasHeight);
+    oneIdleCached = false;
+    preAllocGridInitialized = false;
+
+    fill(0);
+    textAlign(CENTER, CENTER);
+    textSize(36);
+    text("按下按鈕開始第一張", oneCanvasX + oneCanvasWidth/2, canvasHeight/2);
+    text("按下按鈕開始第一張", twoCanvasX + twoCanvasWidth/2, canvasHeight/2);
+    return;
+  }
+
+  // ── 預分配格子模式（preAllocatedMode）──
+  // oneCanvas 顯示預先排好的 8 格佈局，每次收到圖片就溶解填入對應格子。
+  // 不受 globalWaitingState / imageWaitingState 影響，也不在新 Step 時清除。
+  if (preAllocatedMode) {
+    drawOnePreAllocated();
+
+    // twoCanvas：等待 noise 或播放動畫
+    if (globalWaitingState || noiseWaitingState) {
+      fill(0);
+      textAlign(CENTER, CENTER);
+      textSize(36);
+      text("Waiting for the noise ......", twoCanvasX + twoCanvasWidth/2, canvasHeight/2);
+    } else {
+      drawTwoAnimation();
+    }
+
+    drawCountdownBorder();
     return;
   }
   
@@ -2099,6 +2184,311 @@ function drawTwoAnimation() {
   pop();
 }
 
+// ========== 預分配格子模式 (preAllocated Mode) oneCanvas 函數 ==========
+
+// 計算 4 列 × 2 欄的格子佈局（移除互動版的 Row 0 init_image 與 Row 5 QR code）
+// 左欄：Step 1-4（order 0-3），右欄：Step 5-8（order 4-7）
+function computePreAllocLayout() {
+  let availH = canvasHeight - 90; // 保留底部 90px 給狀態文字
+  // 高度計算：上邊距 + 下邊距（各 preAllocBorderMargin）+ 3 個列間距（preAllocGap）+ 4 列圖片
+  let h = (availH - 2 * preAllocBorderMargin - 3 * preAllocGap) / 4;
+  let w = h * 2 / 3; // 圖片寬高比 2:3
+
+  let twoColW = 2 * w + preAllocGap; // 兩欄圖片 + 欄間距
+  let twoColX = (oneCanvasWidth - twoColW) / 2; // 水平置中
+
+  let slots = {};
+  for (let row = 0; row < 4; row++) {
+    let y = preAllocBorderMargin + row * (h + preAllocGap);
+    slots[row]     = { x: twoColX,                    y, w, h }; // 左欄 order 0-3
+    slots[row + 4] = { x: twoColX + w + preAllocGap,  y, w, h }; // 右欄 order 4-7
+  }
+  return { h, w, slots };
+}
+
+// 啟動指定格子（slotIdx 0-7）的溶解動畫（從灰底 → 目標圖片）
+function startPreAllocDissolve(slotIdx, img) {
+  if (!preAllocLayout) return;
+  let slot = preAllocLayout.slots[slotIdx];
+  if (!slot) return;
+
+  let sw = Math.round(slot.w);
+  let sh = Math.round(slot.h);
+
+  // 縮放目標圖片至格子尺寸
+  let targetImg = createImage(img.width, img.height);
+  targetImg.copy(img, 0, 0, img.width, img.height, 0, 0, img.width, img.height);
+  targetImg.resize(sw, sh);
+  targetImg.loadPixels();
+
+  // 取得前一格狀態（用於移動動畫起點 & 溶解初始畫面）
+  const prevState = slotIdx > 0 ? preAllocDissolves[slotIdx - 1] : null;
+  const prevSlot  = slotIdx > 0 ? preAllocLayout.slots[slotIdx - 1] : null;
+
+  // 初始化 blended：
+  //   slotIdx > 0 → 從前一步的最終圖片開始溶解（移動動畫結束後）
+  //   slotIdx = 0 → 從灰色佔位格開始
+  let blended = createImage(sw, sh);
+  blended.loadPixels();
+  if (prevState && prevState.targetImg && prevState.targetImg.pixels && prevState.targetImg.pixels.length > 0) {
+    blended.pixels.set(prevState.targetImg.pixels);
+  } else {
+    for (let i = 0; i < blended.pixels.length; i += 4) {
+      blended.pixels[i] = blended.pixels[i + 1] = blended.pixels[i + 2] = 230;
+      blended.pixels[i + 3] = 255;
+    }
+  }
+  blended.updatePixels();
+
+  let bs = preAllocBlockSize;
+  let bx = Math.ceil(sw / bs);
+  let by = Math.ceil(sh / bs);
+  let total = bx * by;
+
+  let startTimes    = new Float32Array(total);
+  let grayDurations = new Float32Array(total);
+  let grayEndTimes  = new Float32Array(total);
+  let grayValues    = new Float32Array(total);
+  let blockDone     = new Uint8Array(total);
+  let blockInGray   = new Uint8Array(total);
+
+  for (let i = 0; i < total; i++) {
+    let st = Math.random() * 2.8 + 0.2;
+    let gd = Math.random() * 1.0 + 0.3;
+    startTimes[i]    = st;
+    grayDurations[i] = gd;
+    grayEndTimes[i]  = st + gd;
+    let u = Math.max(Math.random(), 1e-10);
+    let v = Math.random();
+    let z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+    grayValues[i] = Math.max(0, Math.min(255, Math.round(128 + z * 60)));
+  }
+
+  let sortedByStart = Array.from({ length: total }, (_, i) => i).sort((a, b) => startTimes[a] - startTimes[b]);
+  let sortedByEnd   = Array.from({ length: total }, (_, i) => i).sort((a, b) => grayEndTimes[a] - grayEndTimes[b]);
+
+  preAllocDissolves[slotIdx] = {
+    targetImg, blended, slot,
+    blockSize: bs, blocksX: bx, blocksY: by, totalBlocks: total,
+    startTimes, grayDurations, grayEndTimes, grayValues,
+    blockDone, blockInGray,
+    sortedByStart, sortedByEnd,
+    nextGrayIdx: 0, nextFinalIdx: 0,
+    remainingBlocks: total,
+    globalTime: 0,
+    lastFrameTime: millis() / 1000.0,
+    done: false,
+    committed: false,
+    initialDrawn: false,
+    // ── 移動動畫狀態 ──
+    // slotIdx > 0 時先執行 'moving'，完成後切換為 'dissolving'
+    phase: prevState ? 'moving' : 'dissolving',
+    moveStartTime: millis() / 1000.0,
+    moveFromX: prevSlot ? prevSlot.x : slot.x,
+    moveFromY: prevSlot ? prevSlot.y : slot.y,
+    prevTargetImg: prevState ? prevState.targetImg : null
+  };
+}
+
+function paintPreAllocBlockGray(state, bi) {
+  if (state.blockInGray[bi] || state.blockDone[bi]) return false;
+  let gv = state.grayValues[bi];
+  let bx = (bi % state.blocksX) * state.blockSize;
+  let by = Math.floor(bi / state.blocksX) * state.blockSize;
+  let ex = Math.min(bx + state.blockSize, state.targetImg.width);
+  let ey = Math.min(by + state.blockSize, state.targetImg.height);
+  let w  = state.targetImg.width;
+  state.blockInGray[bi] = 1;
+  for (let y = by; y < ey; y++) {
+    for (let x = bx; x < ex; x++) {
+      let i = (y * w + x) * 4;
+      state.blended.pixels[i] = gv;
+      state.blended.pixels[i + 1] = gv;
+      state.blended.pixels[i + 2] = gv;
+      state.blended.pixels[i + 3] = 255;
+    }
+  }
+  return true;
+}
+
+function paintPreAllocBlockFinal(state, bi) {
+  if (state.blockDone[bi]) return false;
+  let bx = (bi % state.blocksX) * state.blockSize;
+  let by = Math.floor(bi / state.blocksX) * state.blockSize;
+  let ex = Math.min(bx + state.blockSize, state.targetImg.width);
+  let ey = Math.min(by + state.blockSize, state.targetImg.height);
+  let w  = state.targetImg.width;
+  for (let y = by; y < ey; y++) {
+    for (let x = bx; x < ex; x++) {
+      let i = (y * w + x) * 4;
+      state.blended.pixels[i]     = state.targetImg.pixels[i];
+      state.blended.pixels[i + 1] = state.targetImg.pixels[i + 1];
+      state.blended.pixels[i + 2] = state.targetImg.pixels[i + 2];
+      state.blended.pixels[i + 3] = state.targetImg.pixels[i + 3];
+    }
+  }
+  state.blockDone[bi] = 1;
+  state.remainingBlocks--;
+  return true;
+}
+
+function advancePreAllocDissolve(state) {
+  let t = state.globalTime;
+  let dirty = false;
+  while (state.nextGrayIdx < state.totalBlocks) {
+    let bi = state.sortedByStart[state.nextGrayIdx];
+    if (state.startTimes[bi] > t) break;
+    dirty = paintPreAllocBlockGray(state, bi) || dirty;
+    state.nextGrayIdx++;
+  }
+  while (state.nextFinalIdx < state.totalBlocks) {
+    let bi = state.sortedByEnd[state.nextFinalIdx];
+    if (state.grayEndTimes[bi] > t) break;
+    dirty = paintPreAllocBlockFinal(state, bi) || dirty;
+    state.nextFinalIdx++;
+  }
+  if (dirty) state.blended.updatePixels();
+  if (state.remainingBlocks <= 0) state.done = true;
+  return dirty;
+}
+
+// 繪製預分配格子模式的 oneCanvas
+function drawOnePreAllocated() {
+  push();
+  translate(oneCanvasX, 0);
+
+  if (!preAllocLayout) { pop(); return; }
+
+  // 懶初始化離屏背景層
+  if (!preAllocMainGraphics) {
+    preAllocMainGraphics = createGraphics(oneCanvasWidth, canvasHeight);
+    preAllocMainGraphics.noSmooth();
+  }
+
+  // 第一次（或畫布被清除後）：畫灰色佔位格與 Step 標籤
+  // 同步寫入主畫布與離屏背景層，供移動動畫清底使用
+  if (!preAllocGridInitialized) {
+    const stepLabels = ['Step 1', 'Step 2', 'Step 3', 'Step 4',
+                        'Step 5', 'Step 6', 'Step 7', 'Step 8'];
+    const slots = preAllocLayout.slots;
+
+    // ── 主畫布 ──
+    fill(255); noStroke();
+    rect(0, 0, oneCanvasWidth, canvasHeight);
+    fill(230); noStroke();
+    for (let order = 0; order <= 7; order++) {
+      let sl = slots[order];
+      rect(sl.x, sl.y, sl.w, sl.h);
+    }
+    fill(0); noStroke(); textSize(28);
+    for (let order = 0; order <= 7; order++) {
+      let sl = slots[order];
+      let cy = sl.y + sl.h / 2;
+      if (order <= 3) { textAlign(RIGHT, CENTER); text(stepLabels[order], sl.x - 50, cy); }
+      else            { textAlign(LEFT,  CENTER); text(stepLabels[order], sl.x + sl.w + 50, cy); }
+    }
+
+    // ── 離屏背景層（同樣內容）──
+    preAllocMainGraphics.background(255);
+    preAllocMainGraphics.fill(230); preAllocMainGraphics.noStroke();
+    for (let order = 0; order <= 7; order++) {
+      let sl = slots[order];
+      preAllocMainGraphics.rect(sl.x, sl.y, sl.w, sl.h);
+    }
+    preAllocMainGraphics.fill(0); preAllocMainGraphics.noStroke();
+    preAllocMainGraphics.textSize(28);
+    for (let order = 0; order <= 7; order++) {
+      let sl = slots[order];
+      let cy = sl.y + sl.h / 2;
+      if (order <= 3) { preAllocMainGraphics.textAlign(RIGHT, CENTER); preAllocMainGraphics.text(stepLabels[order], sl.x - 50, cy); }
+      else            { preAllocMainGraphics.textAlign(LEFT,  CENTER); preAllocMainGraphics.text(stepLabels[order], sl.x + sl.w + 50, cy); }
+    }
+
+    preAllocGridInitialized = true;
+  }
+
+  // ── 偵測是否有進行中的移動動畫 ──
+  let hasMoving = false;
+  for (let si in preAllocDissolves) {
+    if (preAllocDissolves[si].phase === 'moving') { hasMoving = true; break; }
+  }
+
+  // 移動動畫期間：每幀先 blit 乾淨的背景層（清除上幀殘影），再疊上其他元素
+  if (hasMoving) {
+    image(preAllocMainGraphics, 0, 0);
+  }
+
+  let nowSec = millis() / 1000.0;
+
+  // 記錄本幀需要在最後疊繪的移動中圖片（確保它在所有元素最上層）
+  let movingImg = null, movingX = 0, movingY = 0, movingW = 0, movingH = 0;
+
+  for (let slotIdx in preAllocDissolves) {
+    let state = preAllocDissolves[slotIdx];
+    let sl = state.slot;
+
+    // ── 溶解完成 ──
+    if (state.done) {
+      if (!state.committed) {
+        image(state.blended, sl.x, sl.y, sl.w, sl.h);
+        // 同步更新離屏背景層，下次移動動畫清底時能顯示已完成的圖
+        if (preAllocMainGraphics) {
+          preAllocMainGraphics.image(state.blended, sl.x, sl.y, sl.w, sl.h);
+        }
+        state.committed = true;
+      }
+      continue;
+    }
+
+    // ── 移動動畫階段 ──
+    if (state.phase === 'moving') {
+      let elapsed = nowSec - state.moveStartTime;
+      let t = Math.min(1.0, elapsed / preAllocMoveDuration);
+      let easedT = smoothstep(t);
+      let drawX = lerp(state.moveFromX, sl.x, easedT);
+      let drawY = lerp(state.moveFromY, sl.y, easedT);
+
+      if (state.prevTargetImg) {
+        // 延後到迴圈結束後再繪，確保在最上層
+        movingImg = state.prevTargetImg;
+        movingX = drawX; movingY = drawY;
+        movingW = sl.w;  movingH = sl.h;
+      }
+
+      if (t >= 1.0) {
+        // 移動完成 → 切換為溶解階段
+        state.phase = 'dissolving';
+        state.globalTime = 0;
+        state.lastFrameTime = nowSec;
+      }
+      continue;
+    }
+
+    // ── 溶解動畫階段 ──
+    // 首幀立即顯示初始畫面（前一步圖片或灰底），不等第一個方塊觸發
+    if (!state.initialDrawn) {
+      image(state.blended, sl.x, sl.y, sl.w, sl.h);
+      state.initialDrawn = true;
+    }
+
+    let dt = nowSec - state.lastFrameTime;
+    state.lastFrameTime = nowSec;
+    state.globalTime += dt;
+
+    let dirty = advancePreAllocDissolve(state);
+    if (dirty) {
+      image(state.blended, sl.x, sl.y, sl.w, sl.h);
+    }
+  }
+
+  // 移動中的圖片畫在最上層（避免被其他格子蓋住）
+  if (movingImg) {
+    image(movingImg, movingX, movingY, movingW, movingH);
+  }
+
+  pop();
+}
+
 function drawOneAnimation() {
   // 設置 oneCanvas（圖片溶解）繪製區域的偏移
   push();
@@ -2347,7 +2737,7 @@ function drawCountdownBorder() {
       textSize(36);
       let textY = canvasHeight - 60;
       text(`Step ${nowStep} / 8 is finish`, canvasWidth/4, textY);
-      text(`Please press the key`, canvasWidth*3/4, textY);
+      text(`Please change the paper`, canvasWidth*3/4, textY);
     }
     return;
   }
@@ -2386,7 +2776,7 @@ function drawCountdownBorder() {
           textAlign(CENTER, CENTER);
           textSize(36);
           text(`Step ${nowStep} / 8 is finish`, canvasWidth/4, textY);
-          text(`Please press the key`, canvasWidth*3/4, textY);
+          text(`Please change the paper`, canvasWidth*3/4, textY);
         } else {
           text(`Step ${nowStep} / 8 in progress ...`, canvasWidth/4, textY);
           text(`The next step will begin after 00:00`, canvasWidth*3/4, textY);
@@ -2485,7 +2875,16 @@ function drawCountdownBorder() {
 }
 
 function keyPressed() {
-  if (manualMode && waitingForKeypress && (key === 'Enter' || keyCode === ENTER)) {
+  if (manualMode && waitingForHandshakeKeypress && (key === 'Enter' || keyCode === ENTER)) {
+    waitingForHandshakeKeypress = false;
+    hasMainSequenceStarted = true;
+    debugLog('Enter 鍵按下，開始執行主序列');
+    sendStartMessage();
+    globalWaitingState = true;
+    imageWaitingState = true;
+    noiseWaitingState = true;
+    startNewStep();
+  } else if (manualMode && waitingForKeypress && (key === 'Enter' || keyCode === ENTER)) {
     waitingForKeypress = false;
     debugLog('Enter 鍵按下，開始下一步');
     sendStartMessage();
